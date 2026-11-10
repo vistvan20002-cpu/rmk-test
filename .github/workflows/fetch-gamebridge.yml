@@ -14,8 +14,10 @@ jobs:
       - name: Install NDK 30 for converter build
         run: |
           set -euxo pipefail
-          SDKMANAGER=/usr/local/lib/android/sdk/cmdline-tools/16.0/bin/sdkmanager
+          SDKMANAGER=$(find /usr/local/lib/android/sdk -type f -name sdkmanager | head -1)
+          test -n "$SDKMANAGER"
           test -x "$SDKMANAGER"
+          echo "sdkmanager=$SDKMANAGER"
           mkdir -p "$HOME/Android/Sdk"
           yes | "$SDKMANAGER" --sdk_root="$HOME/Android/Sdk" --licenses >/dev/null || true
           "$SDKMANAGER" --sdk_root="$HOME/Android/Sdk" "ndk;30.0.16248370"
