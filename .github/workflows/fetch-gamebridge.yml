@@ -6,7 +6,6 @@ jobs:
   tools:
     runs-on: ubuntu-latest
     steps:
-      - uses: android-actions/setup-android@v3
       - name: Download published GameBridge APK
         run: |
           set -euxo pipefail
@@ -15,15 +14,17 @@ jobs:
       - name: Install NDK 30 for converter build
         run: |
           set -euxo pipefail
-          sdkmanager "ndk;30.0.16248370"
-          mkdir -p "$HOME/Android/Sdk/ndk"
-          ln -sfn "$ANDROID_SDK_ROOT/ndk/30.0.16248370" "$HOME/Android/Sdk/ndk/30.0.16248370"
+          SDKMANAGER=/usr/local/lib/android/sdk/cmdline-tools/16.0/bin/sdkmanager
+          test -x "$SDKMANAGER"
+          mkdir -p "$HOME/Android/Sdk"
+          yes | "$SDKMANAGER" --sdk_root="$HOME/Android/Sdk" --licenses >/dev/null || true
+          "$SDKMANAGER" --sdk_root="$HOME/Android/Sdk" "ndk;30.0.16248370"
       - name: Build host converter
         run: |
           set -euxo pipefail
           git clone --depth 1 https://github.com/braxten509/arm32-bridge.git
           cd arm32-bridge
-          export NDK="$ANDROID_SDK_ROOT/ndk/30.0.16248370"
+          export NDK="$HOME/Android/Sdk/ndk/30.0.16248370"
           cargo build --release -p apk-convert
           cp target/release/apk-convert ../apk-convert-linux-x86_64
       - uses: actions/upload-artifact@v4
