@@ -101,11 +101,25 @@ jobs:
           cd arm32-bridge
           export NDK="$HOME/Android/Sdk/ndk/30.0.16248370"
           cargo build --release -p apk-convert
+          cp target/release/apk-convert ../apk-convert-linux-x86_64
           rustup target add aarch64-linux-android
           sed -i "s#/home/braxtenchenay/Android/Sdk/ndk/30.0.16248370#$NDK#g" .cargo/config.toml
           sed -i "s#/home/braxtenchenay/dev/arm32-bridge#$PWD#g" .cargo/config.toml
+          export ANDROID_NDK_HOME="$NDK"
+          export ANDROID_NDK_ROOT="$NDK"
+          export CMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake"
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("vendor/unicorn-engine-sys/qemu/configure")
+          s=p.read_text()
+          needle='cpu=""\n'
+          replacement='cpu="${cpu:-aarch64}"\n'
+          if needle not in s:
+              raise SystemExit("qemu cpu insertion point not found")
+          p.write_text(s.replace(needle, replacement, 1))
+          PY
+          cargo clean -p unicorn-engine-sys
           cargo build --release --target aarch64-linux-android --lib
-          cp target/release/apk-convert ../apk-convert-linux-x86_64
           cp target/aarch64-linux-android/release/libarm32_bridge.so ../libarm32_bridge-indestructible.so
           cd ..
           unzip -p GameBridge-0.2.apk lib/arm64-v8a/libstandin.so > libstandin.so
