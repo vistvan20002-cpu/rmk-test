@@ -107,16 +107,23 @@ jobs:
           sed -i "s#/home/braxtenchenay/dev/arm32-bridge#$PWD#g" .cargo/config.toml
           export ANDROID_NDK_HOME="$NDK"
           export ANDROID_NDK_ROOT="$NDK"
-          export CMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake"
           python3 - <<'PY'
           from pathlib import Path
-          p=Path("vendor/unicorn-engine-sys/qemu/configure")
+          p=Path("vendor/unicorn-engine-sys/build.rs")
           s=p.read_text()
-          needle='cpu=""\n'
-          replacement='cpu="${cpu:-aarch64}"\n'
+          needle='''    let mut config = cmake::Config::new(uc_dir);'''
+          block='''    let mut config = cmake::Config::new(uc_dir);
+    if std::env::var("TARGET").map(|t| t == "aarch64-linux-android").unwrap_or(false) {
+        let ndk = std::env::var("ANDROID_NDK").expect("ANDROID_NDK must be set");
+        config
+            .define("CMAKE_ANDROID_NDK", &ndk)
+            .define("CMAKE_TOOLCHAIN_FILE", format!("{}/build/cmake/android.toolchain.cmake", ndk))
+            .define("ANDROID_ABI", "arm64-v8a")
+            .define("ANDROID_PLATFORM", "android-21");
+    }'''
           if needle not in s:
-              raise SystemExit("qemu cpu insertion point not found")
-          p.write_text(s.replace(needle, replacement, 1))
+              raise SystemExit("unicorn cmake insertion point not found")
+          p.write_text(s.replace(needle, block, 1))
           PY
           cargo clean -p unicorn-engine-sys
           cargo build --release --target aarch64-linux-android --lib
