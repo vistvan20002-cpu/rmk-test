@@ -1,4 +1,4 @@
-name: Build Indestructible compatibility tools
+name: Build Indestructible reverse-engineering toolchain
 on:
   push:
     branches: [indestructible-temp-fetch]
@@ -11,28 +11,132 @@ jobs:
           set -euxo pipefail
           curl -fL --retry 3 -o GameBridge-0.2.apk https://github.com/braxten509/arm32-bridge/releases/download/v0.2/GameBridge-0.2.apk
           echo "47a6f3ab79a7adb9b0838181edf87c20c8949ce48a7bb38ea91f9e419a116961  GameBridge-0.2.apk" | sha256sum -c -
-      - name: Install NDK 30 for converter build
+
+      - name: Install Android NDK and build tools
         run: |
           set -euxo pipefail
           SDKMANAGER=$(find /usr/local/lib/android/sdk -type f -name sdkmanager | head -1)
           test -n "$SDKMANAGER"
-          test -x "$SDKMANAGER"
-          echo "sdkmanager=$SDKMANAGER"
           mkdir -p "$HOME/Android/Sdk"
           yes | "$SDKMANAGER" --sdk_root="$HOME/Android/Sdk" --licenses >/dev/null || true
-          "$SDKMANAGER" --sdk_root="$HOME/Android/Sdk" "ndk;30.0.16248370"
-      - name: Build host converter
+          "$SDKMANAGER" --sdk_root="$HOME/Android/Sdk" "ndk;30.0.16248370" "build-tools;36.1.0"
+
+      - name: Clone and patch Game Bridge v0.2
         run: |
           set -euxo pipefail
           git clone --depth 1 --branch v0.2 https://github.com/braxten509/arm32-bridge.git
           cd arm32-bridge
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path("src/imports/sockets.rs")
+          s=p.read_text()
+          needle='''        "if_nametoindex" => handler!(|uc, a| Ret::U32(unsafe { libc::if_nametoindex(pointer(a.u32()).cast()) })),'''
+          block='''        "gethostbyaddr" => handler!(|uc, a| {
+              let (address, length, family) = (a.u32(), a.u32(), a.i32());
+              if family != libc::AF_INET || length < 4 {
+                  return Ret::U32(0);
+              }
+              let octets: [u8; 4] = mem().bytes(address, 4).try_into().unwrap();
+              let name = without_gil(move || {
+                  let mut socket: libc::sockaddr_in = unsafe { std::mem::zeroed() };
+                  socket.sin_family = libc::AF_INET as _;
+                  socket.sin_addr = libc::in_addr { s_addr: u32::from_ne_bytes(octets) };
+                  let mut host = [0 as libc::c_char; HOSTENT_NAME_SIZE as usize];
+                  let result = unsafe {
+                      libc::getnameinfo(
+                          (&socket as *const libc::sockaddr_in).cast(),
+                          std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+                          host.as_mut_ptr(),
+                          host.len() as _,
+                          std::ptr::null_mut(),
+                          0,
+                          libc::NI_NAMEREQD,
+                      )
+                  };
+                  if result != 0 {
+                      None
+                  } else {
+                      Some(unsafe { std::ffi::CStr::from_ptr(host.as_ptr()) }.to_bytes().to_vec())
+                  }
+              });
+              match name {
+                  Some(name) => Ret::U32(write_hostent(&name, &[octets])),
+                  None => Ret::U32(0),
+              }
+          }),
+          "if_nametoindex" => handler!(|uc, a| Ret::U32(unsafe { libc::if_nametoindex(pointer(a.u32()).cast()) })),'''
+          if needle not in s:
+              raise SystemExit("gethostbyaddr insertion point not found")
+          s=s.replace(needle, block, 1)
+          trailer='''        _ => None,
+              }
+          }'''
+          test='''        _ => None,
+              }
+          }
+
+          #[cfg(test)]
+          mod indestructible_compat_tests {
+              #[test]
+              fn gethostbyaddr_is_supported() {
+                  assert!(super::handler("gethostbyaddr").is_some());
+              }
+          }'''
+          if trailer not in s:
+              raise SystemExit("test insertion point not found")
+          s=s.replace(trailer, test, 1)
+          p.write_text(s)
+          PY
+
+      - name: Test compatibility patch
+        run: |
+          set -euxo pipefail
+          cd arm32-bridge
+          export NDK="$HOME/Android/Sdk/ndk/30.0.16248370"
+          cargo test --lib gethostbyaddr_is_supported
+
+      - name: Build host converter and ARM64 bridge
+        run: |
+          set -euxo pipefail
+          cd arm32-bridge
           export NDK="$HOME/Android/Sdk/ndk/30.0.16248370"
           cargo build --release -p apk-convert
+          rustup target add aarch64-linux-android
+          sed -i "s#/home/braxtenchenay/Android/Sdk/ndk/30.0.16248370#$NDK#g" .cargo/config.toml
+          sed -i "s#/home/braxtenchenay/dev/arm32-bridge#$PWD#g" .cargo/config.toml
+          cargo build --release --target aarch64-linux-android --lib
           cp target/release/apk-convert ../apk-convert-linux-x86_64
+          cp target/aarch64-linux-android/release/libarm32_bridge.so ../libarm32_bridge-indestructible.so
+          cd ..
+          unzip -p GameBridge-0.2.apk lib/arm64-v8a/libstandin.so > libstandin.so
+
+      - name: Download REA-aligned Android analysis tools
+        run: |
+          set -euxo pipefail
+          curl -fL --retry 3 -o jadx-1.5.6.zip https://github.com/skylot/jadx/releases/download/v1.5.6/jadx-1.5.6.zip
+          echo "545ea2be9c242511bc145755cf4bda2485ade42966e096f8b4d3da2a230e8974  jadx-1.5.6.zip" | sha256sum -c -
+          curl -fL --retry 3 -o apktool_3.0.3.jar https://github.com/iBotPeaches/Apktool/releases/download/v3.0.3/apktool_3.0.3.jar
+          echo "dbf930b076c6b9be08d57c449cacefc3bdd6b71ebd59b3066fc0e1f5b14f9423  apktool_3.0.3.jar" | sha256sum -c -
+          unzip -q jadx-1.5.6.zip -d jadx-1.5.6
+
+      - name: Collect Android signing/build tools
+        run: |
+          set -euxo pipefail
+          BT="$HOME/Android/Sdk/build-tools/36.1.0"
+          mkdir -p android-build-tools/lib
+          cp "$BT/apksigner" android-build-tools/
+          cp "$BT/zipalign" android-build-tools/
+          cp "$BT/aapt2" android-build-tools/
+          cp "$BT/lib/apksigner.jar" android-build-tools/lib/
+
       - uses: actions/upload-artifact@v4
         with:
-          name: indestructible-tools
+          name: indestructible-re-tools
           path: |
-            GameBridge-0.2.apk
             apk-convert-linux-x86_64
+            libarm32_bridge-indestructible.so
+            libstandin.so
+            android-build-tools/
+            jadx-1.5.6/
+            apktool_3.0.3.jar
           if-no-files-found: error
