@@ -22,7 +22,7 @@ jobs:
       - name: Build host converter
         run: |
           set -euxo pipefail
-          git clone --depth 1 https://github.com/braxten509/arm32-bridge.git
+          git clone --depth 1 --branch v0.2 https://github.com/braxten509/arm32-bridge.git
           cd arm32-bridge
           export NDK="$HOME/Android/Sdk/ndk/30.0.16248370"
           cargo build --release -p apk-convert
