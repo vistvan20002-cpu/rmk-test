@@ -1,9 +1,9 @@
-name: Fetch GameBridge binary
+name: Build Indestructible compatibility tools
 on:
   push:
     branches: [indestructible-temp-fetch]
 jobs:
-  fetch:
+  tools:
     runs-on: ubuntu-latest
     steps:
       - name: Download published GameBridge APK
@@ -11,8 +11,17 @@ jobs:
           set -euxo pipefail
           curl -fL --retry 3 -o GameBridge-0.2.apk https://github.com/braxten509/arm32-bridge/releases/download/v0.2/GameBridge-0.2.apk
           echo "47a6f3ab79a7adb9b0838181edf87c20c8949ce48a7bb38ea91f9e419a116961  GameBridge-0.2.apk" | sha256sum -c -
+      - name: Build host converter
+        run: |
+          set -euxo pipefail
+          git clone --depth 1 https://github.com/braxten509/arm32-bridge.git
+          cd arm32-bridge
+          cargo build --release -p apk-convert
+          cp target/release/apk-convert ../apk-convert-linux-x86_64
       - uses: actions/upload-artifact@v4
         with:
-          name: gamebridge-0.2
-          path: GameBridge-0.2.apk
+          name: indestructible-tools
+          path: |
+            GameBridge-0.2.apk
+            apk-convert-linux-x86_64
           if-no-files-found: error
